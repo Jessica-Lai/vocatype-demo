@@ -1,146 +1,150 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
-  <meta charset="utf-8"/>
-  <title>VocaType — Day 3 Demo</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>vocatype-demo v2 (use_word)</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto;max-width:760px;margin:40px auto;padding:0 16px}
-    h1{margin-bottom:6px}
-    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-top:12px}
-    .meta{opacity:.75;margin:8px 0}
-    input[type="text"]{font-size:18px;padding:10px;width:100%;border-radius:8px;border:1px solid #ccc}
-    input[type="file"]{margin-top:8px}
-    button{margin-top:8px;padding:8px 14px;border-radius:8px;border:1px solid #ccc;cursor:pointer}
-    .ok{color:#0a7f2e}
-    .bad{color:#b00020}
-    .row{display:flex;gap:8px;align-items:center}
+    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial; margin: 20px; }
+    .box { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    .row { margin: 6px 0; }
+    input[type="text"] { width: 360px; padding: 6px; }
+    button { padding: 6px 10px; }
+    .small { color: #666; font-size: 12px; }
+    .ok { color: #0a7; }
+    .bad { color: #c22; }
+    pre { white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h1>VocaType — Day 3 Demo</h1>
-  <p class="meta">Import a CSV (term, zh). The app will speak the word.</p>
+  <h2>vocatype-demo v2（use_word 當答案）</h2>
 
-  <!-- Import -->
-  <div class="card">
-    <b>Import Vocabulary (CSV)</b>
-    <p class="meta">Format: term, zh (first row as header)</p>
-    <input type="file" id="fileInput" accept=".csv"/>
-    <div id="importStatus" class="meta"></div>
+  <div class="box">
+    <div class="row">
+      <label>API Base URL：</label>
+      <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
+      <span class="small">（後端跑在本機時用這個）</span>
+    </div>
+    <div class="row">
+      <label>User ID：</label>
+      <input id="userId" type="text" value="demo_user" />
+    </div>
   </div>
 
-  <!-- Practice -->
-  <div class="card">
+  <div class="box">
+    <h3>1) 匯入檔案（TSV/CSV）</h3>
+    <input id="fileInput" type="file" />
+    <button onclick="doImport()">Import</button>
+    <pre id="importResult" class="small"></pre>
+  </div>
+
+  <div class="box">
+    <h3>2) 取得 Top30 題目</h3>
+    <button onclick="loadTop30()">Load Top30</button>
+    <div id="count" class="small"></div>
+  </div>
+
+  <div class="box">
+    <h3>3) 作答</h3>
+    <div id="qArea"></div>
     <div class="row">
-      <div id="prompt" class="meta"></div>
-      <button id="play">🔊 Play</button>
+      <input id="answerInput" type="text" placeholder="輸入英文答案（use_word）" />
+      <button onclick="submitAnswer()">Submit</button>
     </div>
-    <input id="answer" type="text" placeholder="Type here and press Enter" autocomplete="off"/>
-    <div id="feedback" class="meta"></div>
-    <button id="next">Next</button>
+    <div id="feedback" class="small"></div>
   </div>
 
 <script>
-let words = JSON.parse(localStorage.getItem("vocatype_words") || "[]");
-let i = 0;
-let start = Date.now();
+let items = [];
+let idx = 0;
 
-const promptEl = document.getElementById("prompt");
-const ansEl = document.getElementById("answer");
-const fbEl = document.getElementById("feedback");
-const nextBtn = document.getElementById("next");
-const fileInput = document.getElementById("fileInput");
-const importStatus = document.getElementById("importStatus");
-const playBtn = document.getElementById("play");
+function apiBase(){ return document.getElementById("apiBase").value.replace(/\/+$/,''); }
+function userId(){ return document.getElementById("userId").value.trim() || "demo_user"; }
 
-// ---- Speech ----
-function speak(text){
-  if(!('speechSynthesis' in window)) return;
-  const u = new SpeechSynthesisUtterance(text);
-  // Try to pick an English voice
-  const voices = speechSynthesis.getVoices();
-  const en = voices.find(v => v.lang && v.lang.startsWith("en"));
-  if(en) u.voice = en;
-  u.rate = 0.9; // slower = clearer for learners
-  u.pitch = 1.0;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(u);
+async function doImport(){
+  const f = document.getElementById("fileInput").files[0];
+  if(!f){ alert("請先選檔案"); return; }
+  const fd = new FormData();
+  fd.append("file", f);
+
+  const url = `${apiBase()}/import?user_id=${encodeURIComponent(userId())}`;
+  const res = await fetch(url, { method:"POST", body: fd });
+  const data = await res.json();
+  document.getElementById("importResult").textContent = JSON.stringify(data, null, 2);
 }
 
-function wpm(chars, ms){
-  const min = ms/60000;
-  return Math.round((chars/5)/Math.max(min,0.001));
+async function loadTop30(){
+  const url = `${apiBase()}/quiz/top30?user_id=${encodeURIComponent(userId())}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  items = data.items || [];
+  idx = 0;
+  document.getElementById("count").textContent = `取得題目數：${items.length}`;
+  renderQuestion();
 }
 
-function show(){
-  if(words.length === 0){
-    promptEl.innerHTML = "No words loaded. Please import a CSV file.";
-    ansEl.disabled = true;
+function renderQuestion(){
+  const q = items[idx];
+  const area = document.getElementById("qArea");
+  const fb = document.getElementById("feedback");
+  fb.textContent = "";
+  document.getElementById("answerInput").value = "";
+  if(!q){
+    area.innerHTML = "<div class='ok'>目前沒有題目（先 Import，再 Load Top30）</div>";
     return;
   }
-  ansEl.disabled = false;
-  const w = words[i];
-  promptEl.innerHTML = `Meaning: <b>${w.zh}</b>`;
-  fbEl.textContent = "";
-  ansEl.value = "";
-  ansEl.focus();
-  start = Date.now();
-  // auto speak
-  speak(w.term);
+  const p = q.prompt;
+  area.innerHTML = `
+    <div class="row"><b>Q${idx+1}</b>（請輸入 use_word）</div>
+    <div class="row"><b>中文：</b>${esc(p.zh_meaning || "")}</div>
+    <div class="row"><b>base_word：</b>${esc(p.base_word || "")}</div>
+    <div class="row"><b>pos：</b>${esc(p.target_pos || "")}</div>
+    <div class="row"><b>IPA：</b>${esc(p.ipa || "")}</div>
+    <div class="row"><b>例句 EN：</b>${esc(p.example_en || "")}</div>
+    <div class="row"><b>例句 ZH：</b>${esc(p.example_zh || "")}</div>
+    <div class="row"><b>phrases：</b>${esc(p.phrases || "")}</div>
+    <div class="row"><b>note：</b>${esc(p.note || "")}</div>
+    <div class="small">priority_score: ${q.meta.priority_score.toFixed(2)} | attempts: ${q.meta.total_attempts}</div>
+  `;
 }
 
-ansEl.addEventListener("keydown", e=>{
-  if(e.key !== "Enter") return;
-  if(words.length === 0) return;
+async function submitAnswer(){
+  const q = items[idx];
+  if(!q){ return; }
+  const ans = document.getElementById("answerInput").value;
 
-  const typed = ansEl.value.trim();
-  const target = words[i].term;
-  const speed = wpm(typed.length, Date.now()-start);
+  const url = `${apiBase()}/quiz/answer`;
+  const res = await fetch(url, {
+    method:"POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify({
+      user_id: userId(),
+      voca_item_id: q.voca_item_id,
+      user_answer: ans
+    })
+  });
+  const data = await res.json();
 
-  if(typed.toLowerCase() === target.toLowerCase()){
-    fbEl.innerHTML = `<span class="ok">Correct</span> · ${speed} WPM`;
+  const fb = document.getElementById("feedback");
+  if(data.is_correct){
+    fb.innerHTML = `<span class="ok">✔ Correct</span> | error_rate=${(data.error_rate||0).toFixed(2)}`;
   }else{
-    fbEl.innerHTML = `<span class="bad">Not quite</span> · answer: <b>${target}</b> · ${speed} WPM`;
+    fb.innerHTML = `<span class="bad">✘ Wrong</span> | 正確答案：<b>${esc(data.correct_answer||"")}</b> | error_rate=${(data.error_rate||0).toFixed(2)}`;
   }
-});
 
-nextBtn.onclick = ()=>{
-  if(words.length === 0) return;
-  i = (i+1) % words.length;
-  show();
-};
+  idx += 1;
+  if(idx >= items.length){
+    fb.innerHTML += "<div class='ok'>已完成本輪題目。再 Load Top30 會依錯誤率重排。</div>";
+  }else{
+    renderQuestion();
+  }
+}
 
-playBtn.onclick = ()=>{
-  if(words.length === 0) return;
-  speak(words[i].term);
-};
-
-// CSV Import
-fileInput.addEventListener("change", () => {
-  const file = fileInput.files[0];
-  if(!file) return;
-
-  const reader = new FileReader();
-  reader.onload = e => {
-    const text = e.target.result;
-    const lines = text.split(/\r?\n/).filter(l => l.trim());
-    lines.shift(); // remove header
-
-    const imported = lines.map(line => {
-      const [term, zh] = line.split(",");
-      return { term: term.trim(), zh: zh.trim() };
-    }).filter(w => w.term && w.zh);
-
-    words = imported;
-    localStorage.setItem("vocatype_words", JSON.stringify(words));
-    i = 0;
-    importStatus.textContent = `Imported ${words.length} words successfully.`;
-    show();
-  };
-  reader.readAsText(file);
-});
-
-show();
+function esc(s){
+  return (s||"").replace(/[&<>"']/g, m => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[m]));
+}
 </script>
 </body>
 </html>
